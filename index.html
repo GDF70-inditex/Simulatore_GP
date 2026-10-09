@@ -193,9 +193,14 @@ input[type="range"].leva-slider::-moz-range-thumb{
 input[type="range"].leva-slider:active::-webkit-slider-thumb{transform:scale(1.1)}
 
 .leva-zero-mark{
-  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  position:absolute;top:50%;transform:translate(-50%,-50%);
   width:2px;height:14px;background:var(--text-mute);border-radius:1px;
-  pointer-events:none;opacity:.4;
+  pointer-events:none;opacity:.55;
+}
+.leva-zero-label{
+  position:absolute;top:calc(50% + 12px);transform:translateX(-50%);
+  font-size:9px;color:var(--text-mute);font-weight:600;
+  pointer-events:none;letter-spacing:0.02em;
 }
 
 @media(max-width:760px){
@@ -663,10 +668,25 @@ function computeConsolidato() {
   Object.keys(template.real).forEach(k => {
     template.real[k] = new Array(12).fill(0);
   });
+  // Azzero anche n1.mensile per poi sommarlo sui brand
+  if (template.n1 && template.n1.mensile) {
+    Object.keys(template.n1.mensile).forEach(k => {
+      if (Array.isArray(template.n1.mensile[k])) {
+        template.n1.mensile[k] = new Array(12).fill(0);
+      }
+    });
+  }
   
-  // Per il consolidato, lo stato chiuso/aperto deve essere identico tra brand (assumo coerenza)
-  // Prendo lo stato del primo brand caricato
-  template.stato = [...BRANDS[loaded[0]].stato];
+  // Per il consolidato, lo stato chiuso/aperto DEVE essere il MINIMO COMUNE
+  // fra tutti i brand caricati: un mese è "CHIUSO" nel consolidato solo se è chiuso
+  // in TUTTI i brand caricati. Altrimenti alcuni brand avrebbero real=0 e falserebbero
+  // il totale YTD.
+  template.stato = [];
+  for (let i = 0; i < 12; i++) {
+    // Chiuso solo se tutti i brand caricati hanno stato CHIUSO al mese i
+    const tuttiChiusi = loaded.every(k => BRANDS[k].stato[i] === 'CHIUSO');
+    template.stato[i] = tuttiChiusi ? 'CHIUSO' : 'APERTO';
+  }
   
   // Sommo le serie numeriche di ogni brand caricato
   loaded.forEach(k => {
@@ -684,6 +704,15 @@ function computeConsolidato() {
         template.real[voce][i] += (b.real[voce][i] || 0);
       }
     });
+    // Sommo n1.mensile (per la corretta visualizzazione N-1 nel Consolidato)
+    if (b.n1 && b.n1.mensile && template.n1 && template.n1.mensile) {
+      Object.keys(b.n1.mensile).forEach(voce => {
+        if (!Array.isArray(b.n1.mensile[voce]) || !Array.isArray(template.n1.mensile[voce])) return;
+        for (let i = 0; i < 12; i++) {
+          template.n1.mensile[voce][i] += (b.n1.mensile[voce][i] || 0);
+        }
+      });
+    }
   });
   
   // Mix IV YTD consolidato: media pesata sulle ore dirette consuntivate
@@ -856,21 +885,30 @@ function calcolaMese(i) {
   // Mese aperto: leggo le leve dal periodo che lo contiene
   const lv = leveDelMese(i);
   
-  const vendite = ppto.vendite[i] * (1 + lv.vendite);
-  const ore_tot_bud = ppto.ore_dir[i] + ppto.ore_int[i];
-  const ore_tot = ore_tot_bud * (1 + lv.ore);
+  // NUOVA LOGICA Vendite: base = N-1 mensile (fallback Budget se N-1 non disponibile)
+  const venditeBase = venditeN1OrBudMese(i);
+  const vendite = venditeBase * (1 + lv.vendite);
   
-  // NUOVA LOGICA Ore Interinali (sostituisce Mix Interinali):
-  // ore_int = base × (1 + leva) dove base = ore_int N-1 mensile (fallback al Budget)
-  // ore_dir = ore_tot - ore_int (derivate, possono diventare 0 o negative con leve estreme)
+  // LOGICA Ore Totali (definitiva):
+  // 1) Il target è il TOTALE (dir + int + alm) = N-1 tot × (1 + leva Ore)
+  // 2) La LOGISTICA (alm) è fissa dal Budget (invariata)
+  // 3) Le INTERINALI sono governate dalla loro leva: N-1 int × (1 + leva Interinali)
+  // 4) Le DIRETTE = Totale − Interinali − Logistica (per differenza)
+  const oreTotBase = oreTotN1OrBudMese(i);              // N-1 dir + int + alm (fallback Budget)
+  const ore_tot_target = oreTotBase * (1 + lv.ore);     // target totale scenario
+  const ore_alm_pre = DATA.ppto.ore_alm ? (DATA.ppto.ore_alm[i] || 0) : 0;  // Logistica fissa dal Budget
+
+  // Ore Interinali: leva Δ% vs N-1 (base = N-1 interinali; fallback Budget)
   const oreIntBase = oreIntN1OrBudMese(i);
   let ore_int = oreIntBase * (1 + lv.mix_int);
   if (ore_int < 0) ore_int = 0;
-  
-  // Ore dirette = totale - interinali. Possono diventare 0 o negative se leva estrema.
-  const ore_dir_raw = ore_tot - ore_int;
-  const ore_dir = ore_dir_raw;  // lascio passare anche negativo, flag sotto
+
+  // Dirette = target totale − interinali − logistica (per differenza)
+  const ore_dir_raw = ore_tot_target - ore_int - ore_alm_pre;
+  const ore_dir = ore_dir_raw;
   const oreDirNegOrZero = ore_dir_raw <= 0;
+  // ore_tot per il return: coincide col target (dir + int + alm)
+  const ore_tot = ore_tot_target;
   
   const f_base = fattoreMixBase();
   const f_scen = fattoreMixScen(lv.mix_iv);
@@ -898,7 +936,7 @@ function calcolaMese(i) {
   
   // Voci fisse: dal Budget
   const int_almacen = ppto.int_almacen[i];
-  const ore_alm = ppto.ore_alm ? ppto.ore_alm[i] : 0;
+  const ore_alm = ore_alm_pre;  // Logistica fissa dal Budget (già letta sopra)
   const formazione = ppto.formazione[i];
   const ticket = ppto.ticket[i];
   const divise = ppto.divise[i];
@@ -915,7 +953,13 @@ function calcolaMese(i) {
 }
 
 // Calcola tutti i 12 mesi e ritorna struttura aggregata
+// Per il Consolidato: aggrega gli scenari dei singoli brand caricati (ognuno con le sue leve)
 function calcolaScenario() {
+  // CASO CONSOLIDATO: somma gli scenari dei singoli brand caricati
+  if (CURRENT_BRAND === CONSOLIDATO_KEY) {
+    return calcolaScenarioConsolidato();
+  }
+  
   const mensile = [];
   for (let i=0; i<12; i++) mensile.push(calcolaMese(i));
   
@@ -945,6 +989,70 @@ function calcolaScenario() {
   
   return { mensile, anno };
 }
+
+// Calcola lo scenario del Consolidato: somma gli scenari dei singoli brand caricati
+// Ogni brand mantiene le sue leve (leva Vendite +5% su Zara, +3% su Bershka, ecc.)
+function calcolaScenarioConsolidato() {
+  const loaded = loadedBrands();
+  const voci = ['vendite','ore_dir','ore_int','ore_alm','ore_tot','sueldos','segsoc','comisiones','incentivos','int_tienda','int_almacen','formazione','ticket','divise','mat_ps','indemniz','altri'];
+  
+  // Struttura vuota
+  const mensile = [];
+  for (let i = 0; i < 12; i++) {
+    const m = {};
+    voci.forEach(v => m[v] = 0);
+    m._oreDirNegOrZero = false;
+    mensile.push(m);
+  }
+  
+  // Salvo stato corrente per ripristinarlo dopo
+  const savedBrand = CURRENT_BRAND;
+  const savedData = DATA;
+  const savedLevePer = LEVE_PER;
+  
+  // Per ogni brand caricato, calcolo il suo scenario e sommo
+  loaded.forEach(bk => {
+    // Switch temporaneo al brand corrente
+    CURRENT_BRAND = bk;
+    DATA = BRANDS[bk];
+    LEVE_PER = LEVE_PER_BRAND[bk];
+    
+    // Calcolo mese per mese del brand
+    for (let i = 0; i < 12; i++) {
+      const m = calcolaMese(i);
+      voci.forEach(v => mensile[i][v] += (m[v] || 0));
+      if (m._oreDirNegOrZero) mensile[i]._oreDirNegOrZero = true;
+    }
+  });
+  
+  // Ripristino stato originale
+  CURRENT_BRAND = savedBrand;
+  DATA = savedData;
+  LEVE_PER = savedLevePer;
+  
+  // Aggregati anno
+  const anno = {};
+  voci.forEach(v => anno[v] = mensile.reduce((s,m)=>s+(m[v]||0), 0));
+  
+  anno.gp = anno.sueldos + anno.segsoc + anno.comisiones + anno.incentivos + 
+            anno.int_tienda + anno.int_almacen + anno.formazione + anno.ticket + 
+            anno.divise + anno.mat_ps + anno.indemniz + anno.altri;
+  anno.incidenza = anno.gp / anno.vendite;
+  anno.productividad_dir = anno.vendite / anno.ore_dir;
+  anno.productividad_tot = anno.vendite / (anno.ore_dir + anno.ore_int + anno.ore_alm);
+  anno.productividad = anno.productividad_dir;
+  
+  // GP per ogni mese
+  mensile.forEach(m => {
+    m.gp = m.sueldos + m.segsoc + m.comisiones + m.incentivos + 
+           m.int_tienda + m.int_almacen + m.formazione + m.ticket + 
+           m.divise + m.mat_ps + m.indemniz + m.altri;
+    m.incidenza = m.vendite > 0 ? m.gp / m.vendite : 0;
+  });
+  
+  return { mensile, anno };
+}
+
 
 // Aggregati Budget anno
 function calcolaBudget() {
@@ -1025,6 +1133,75 @@ function ytdOreIntVsN1(ytd) {
   return n1Ytd > 0 ? (realYtd/n1Ytd - 1) : 0;
 }
 
+// Vendite N-1 per un dato mese (0..11). Fallback al Budget se N-1 manca
+function venditeN1OrBudMese(i) {
+  if (DATA.n1 && DATA.n1.mensile && DATA.n1.mensile.vendite && DATA.n1.mensile.vendite[i] > 0) {
+    return DATA.n1.mensile.vendite[i];
+  }
+  return DATA.ppto.vendite[i] || 0;
+}
+
+// Ore Totali N-1 per un dato mese: ore_dir + ore_int + ore_alm (N-1)
+// Fallback al Budget se N-1 manca
+function oreTotN1OrBudMese(i) {
+  if (DATA.n1 && DATA.n1.mensile) {
+    const nm = DATA.n1.mensile;
+    const tot = (nm.ore_dir ? (nm.ore_dir[i]||0) : 0)
+              + (nm.ore_int ? (nm.ore_int[i]||0) : 0)
+              + (nm.ore_alm ? (nm.ore_alm[i]||0) : 0);
+    if (tot > 0) return tot;
+  }
+  // fallback Budget totale
+  return (DATA.ppto.ore_dir[i]||0) + (DATA.ppto.ore_int[i]||0)
+       + (DATA.ppto.ore_alm ? (DATA.ppto.ore_alm[i]||0) : 0);
+}
+
+// Ore Tienda N-1 per un dato mese: SOLO ore_dir + ore_int (senza ore_alm/logistica)
+// Usato come base per la leva Ore Totali (che agisce solo su tienda, non su logistica)
+// Fallback al Budget se N-1 manca
+function oreTotTiendaN1OrBudMese(i) {
+  if (DATA.n1 && DATA.n1.mensile) {
+    const nm = DATA.n1.mensile;
+    const tot = (nm.ore_dir ? (nm.ore_dir[i]||0) : 0)
+              + (nm.ore_int ? (nm.ore_int[i]||0) : 0);
+    if (tot > 0) return tot;
+  }
+  // fallback Budget tienda
+  return (DATA.ppto.ore_dir[i]||0) + (DATA.ppto.ore_int[i]||0);
+}
+
+// YTD Δ% Vendite reali vs Vendite N-1 (stessi mesi chiusi)
+function ytdVenditeVsN1() {
+  if (!DATA || !DATA.n1 || !DATA.n1.mensile || !DATA.n1.mensile.vendite) return 0;
+  const mc = maskChiusi();
+  let realYtd = 0, n1Ytd = 0;
+  for (let i = 0; i < 12; i++) {
+    if (mc[i]) {
+      realYtd += DATA.real.vendite[i] || 0;
+      n1Ytd += DATA.n1.mensile.vendite[i] || 0;
+    }
+  }
+  return n1Ytd > 0 ? (realYtd/n1Ytd - 1) : 0;
+}
+
+// YTD Δ% Ore Totali reali vs Ore Totali N-1
+function ytdOreTotVsN1() {
+  if (!DATA || !DATA.n1 || !DATA.n1.mensile) return 0;
+  const mc = maskChiusi();
+  const nm = DATA.n1.mensile;
+  let realYtd = 0, n1Ytd = 0;
+  // Coerente con la leva Ore Totali: confronto TOTALE (dir + int + alm) vs N-1
+  for (let i = 0; i < 12; i++) {
+    if (mc[i]) {
+      realYtd += (DATA.real.ore_dir[i]||0) + (DATA.real.ore_int[i]||0) + (DATA.real.ore_alm ? DATA.real.ore_alm[i]||0 : 0);
+      n1Ytd += (nm.ore_dir ? (nm.ore_dir[i]||0) : 0)
+             + (nm.ore_int ? (nm.ore_int[i]||0) : 0)
+             + (nm.ore_alm ? (nm.ore_alm[i]||0) : 0);
+    }
+  }
+  return n1Ytd > 0 ? (realYtd/n1Ytd - 1) : 0;
+}
+
 // Ore Interinali N-1 per un dato mese (0..11). Fallback al Budget se N-1 manca
 function oreIntN1OrBudMese(i) {
   if (DATA.n1 && DATA.n1.mensile && DATA.n1.mensile.ore_int && DATA.n1.mensile.ore_int[i] > 0) {
@@ -1037,6 +1214,14 @@ function oreIntN1OrBudMese(i) {
 function n1MensDisponibile() {
   return !!(DATA && DATA.n1 && DATA.n1.mensile && DATA.n1.mensile.ore_int && 
             DATA.n1.mensile.ore_int.some(v => v > 0));
+}
+function n1VenditeMensDisp() {
+  return !!(DATA && DATA.n1 && DATA.n1.mensile && DATA.n1.mensile.vendite && 
+            DATA.n1.mensile.vendite.some(v => v > 0));
+}
+function n1OreDirMensDisp() {
+  return !!(DATA && DATA.n1 && DATA.n1.mensile && DATA.n1.mensile.ore_dir && 
+            DATA.n1.mensile.ore_dir.some(v => v > 0));
 }
 
 // =============================================================
@@ -1124,6 +1309,17 @@ function renderHeader() {
   let txt = `${brandName(CURRENT_BRAND)}${annoLbl} · YTD: ${ref}`;
   if (CURRENT_BRAND === CONSOLIDATO_KEY) {
     txt = `${brandName(CURRENT_BRAND)}${annoLbl} · ${totalLoaded} di ${BRAND_LIST.length} brand caricati · YTD: ${ref}`;
+    // Verifica che tutti i brand caricati abbiano lo stesso numero di mesi chiusi
+    const loaded = loadedBrands();
+    const nChiusiPerBrand = loaded.map(k => BRANDS[k].stato.filter(s => s === 'CHIUSO').length);
+    const minN = Math.min(...nChiusiPerBrand);
+    const maxN = Math.max(...nChiusiPerBrand);
+    if (minN !== maxN) {
+      // Brand disallineati: mostra warning esplicito
+      const brandInfo = loaded.map(k => `${brandName(k)}=${BRANDS[k].stato.filter(s => s === 'CHIUSO').length}`).join(', ');
+      txt += `  ⚠ Attenzione: brand con mesi chiusi disallineati (min ${minN}, max ${maxN}). YTD Consolidato limitato a ${minN} mesi comuni.`;
+      console.warn('[Consolidato] Mesi chiusi per brand:', brandInfo);
+    }
   }
   document.getElementById('header-subtitle').textContent = txt;
 }
@@ -1171,8 +1367,8 @@ function renderKPI(anno, bud) {
 
 function renderLeve(ytd) {
   const leveDef = [
-    {key:'vendite',    name:'Vendite',              desc:'Δ% vs Budget · vendite anno totali',         step:0.0025, big:0.01, min:-0.20, max:0.20, isPP:false, direction:+1, ytdRef: ytd.real.vendite/ytd.bud.vendite-1},
-    {key:'ore',        name:'Ore Totali Lavorate',  desc:'Δ% vs Budget · dirette + interinali',         step:0.0025, big:0.01, min:-0.20, max:0.20, isPP:false, direction:-1, ytdRef:(ytd.real.ore_tot/ytd.bud.ore_tot)-1},
+    {key:'vendite',    name:'Vendite',              desc:'Δ% vs N-1 · vendite anno totali',            step:0.0025, big:0.01, min:-0.50, max:1.00, isPP:false, direction:+1, ytdRef: ytdVenditeVsN1()},
+    {key:'ore',        name:'Ore Totali Lavorate',  desc:'Δ% vs N-1 · dir + int + logistica (log fissa dal Budget, differenza sulle dirette)', step:0.0025, big:0.01, min:-0.50, max:1.00, isPP:false, direction:-1, ytdRef: ytdOreTotVsN1()},
     {key:'ch_sueldos', name:'C/H Sueldos',          desc:'Δ% vs Budget · costo orario medio',          step:0.0025, big:0.01, min:-0.10, max:0.10, isPP:false, direction:-1, ytdRef:(ytd.real.ch_sueldos/ytd.bud.ch_sueldos)-1},
     {key:'mix_int',    name:'Ore Interinali',       desc:'Δ% vs N-1 · ore di lavoro interinale',        step:0.01,   big:0.05, min:-1.00, max:10.00, isPP:false, direction:+1, ytdRef: ytdOreIntVsN1(ytd)},
     {key:'mix_iv',     name:'Mix IV livello (auto)', desc:'Calcolato automaticamente dalla leva Ore',    step:0.005,  big:0.01, min:-0.10, max:0.10, isPP:true,  direction:-1, ytdRef:ytd.real.mix_iv-ytd.bud.mix_iv, derived:true},
@@ -1322,36 +1518,67 @@ function renderLeve(ytd) {
       </div>`;
     }
     
-    // Diagnostica vs Budget — solo per la leva Ore Interinali
-    let diagOreInt = '';
-    if (l.key === 'mix_int') {
+    // Diagnostica vs Budget — per le leve che ora hanno base N-1 (vendite, ore, mix_int)
+    let diagVsBud = '';
+    if (l.key === 'mix_int' || l.key === 'vendite' || l.key === 'ore') {
       const scen = calcolaScenario();
-      const n1Ok = n1MensDisponibile();
-      // Per il sotto-periodo attivo, calcolo Ore Interinali scenario vs Budget
-      let intScenSP = 0, intBudSP = 0, hasOreDirNeg = false;
-      pAct.mesi.forEach(i => {
-        const ms = scen.mensile[i];
-        intScenSP += ms.ore_int || 0;
-        intBudSP += DATA.ppto.ore_int[i] || 0;
-        if (ms._oreDirNegOrZero) hasOreDirNeg = true;
-      });
-      const dPct = intBudSP > 0 ? (intScenSP/intBudSP - 1) : 0;
-      const dCls = dPct > 0.001 ? 'up' : (dPct < -0.001 ? 'down' : 'neutral');
+      let n1Ok, scenSP = 0, budSP = 0, hasOreDirNeg = false;
+      let labelUnit = '', labelProj = '';
+      
+      if (l.key === 'mix_int') {
+        n1Ok = n1MensDisponibile();
+        labelUnit = 'h';
+        labelProj = 'Ore Interinali scenario';
+        pAct.mesi.forEach(i => {
+          const ms = scen.mensile[i];
+          scenSP += ms.ore_int || 0;
+          budSP += DATA.ppto.ore_int[i] || 0;
+          if (ms._oreDirNegOrZero) hasOreDirNeg = true;
+        });
+      } else if (l.key === 'vendite') {
+        n1Ok = n1VenditeMensDisp();
+        labelUnit = '€';
+        labelProj = 'Vendite scenario';
+        pAct.mesi.forEach(i => {
+          const ms = scen.mensile[i];
+          scenSP += ms.vendite || 0;
+          budSP += DATA.ppto.vendite[i] || 0;
+        });
+      } else if (l.key === 'ore') {
+        n1Ok = n1OreDirMensDisp();
+        labelUnit = 'h';
+        labelProj = 'Ore Totali scenario';
+        // Confronto TOTALE (dir + int + alm) vs Budget totale, coerente con la leva
+        pAct.mesi.forEach(i => {
+          const ms = scen.mensile[i];
+          scenSP += (ms.ore_dir || 0) + (ms.ore_int || 0) + (ms.ore_alm || 0);
+          budSP += (DATA.ppto.ore_dir[i] || 0) + (DATA.ppto.ore_int[i] || 0) + (DATA.ppto.ore_alm ? DATA.ppto.ore_alm[i] : 0);
+        });
+      }
+      
+      const dPct = budSP > 0 ? (scenSP/budSP - 1) : 0;
+      // Convenzione: per Vendite +% è bene (verde), per Ore/Interinali -% è bene (verde)
+      const goodDirection = (l.key === 'vendite') ? +1 : -1;
+      const dCls = (dPct * goodDirection > 0.001) ? 'down' : (dPct * goodDirection < -0.001 ? 'up' : 'neutral');
       const dSign = dPct >= 0 ? '+' : '';
       
       const warningN1 = !n1Ok ? `<span style="color:#B45309;font-weight:600;font-size:11px;background:#FEF3C7;padding:2px 8px;border-radius:8px;margin-left:8px">⚠ N-1 mensile non disponibile · leva applicata su Budget</span>` : '';
       const warningNeg = hasOreDirNeg ? `<span style="color:#B91C1C;font-weight:600;font-size:11px;background:#FEE2E2;padding:2px 8px;border-radius:8px;margin-left:8px">⚠ Ore interinali ≥ ore totali · ore dirette ≤ 0</span>` : '';
       
-      diagOreInt = `<div class="subperiod-diag" style="margin-top:6px;padding:8px 10px;background:#F8FAFC;border-left:3px solid #94A3B8;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      const fmt = labelUnit === '€' ? fmtEur : fmtEur;  // stesso formato int
+      diagVsBud = `<div class="subperiod-diag" style="margin-top:6px;padding:8px 10px;background:#F8FAFC;border-left:3px solid #94A3B8;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="muted">Proiezione vs Budget (${pAct.mesi.map(i=>MESI[i]).join('+')}):</span>
-        <span style="font-weight:600">${fmtEur(intScenSP)} h</span>
+        <span style="font-weight:600">${fmt(scenSP)} ${labelUnit}</span>
         <span class="muted">scenario,</span>
-        <span style="font-weight:600">${fmtEur(intBudSP)} h</span>
+        <span style="font-weight:600">${fmt(budSP)} ${labelUnit}</span>
         <span class="muted">budget</span>
         <span class="kpi-trend ${dCls}" style="font-weight:600">${dSign}${(dPct*100).toFixed(2)}%</span>
         ${warningN1}${warningNeg}
       </div>`;
     }
+    
+    // Etichetta YTD: se leva vs N-1, mostra "YTD vs N-1"; altrimenti "YTD"
+    const showVsN1 = (l.key === 'mix_int' || l.key === 'vendite' || l.key === 'ore');
     
     html += `
     <div class="leva-row">
@@ -1361,13 +1588,13 @@ function renderLeve(ytd) {
           <div class="leva-desc">${l.desc}</div>
         </div>
         <div class="leva-ytd">
-          <span>YTD${l.key === 'mix_int' ? ' vs N-1' : ''}:</span>
+          <span>YTD${showVsN1 ? ' vs N-1' : ''}:</span>
           <span class="leva-ytd-val ${ytdClass}">${ytdLabel}${l.isPP?' pp':' %'}</span>
         </div>
       </div>
       ${chipsHtml}
       ${toolbar}
-      ${diagOreInt}
+      ${diagVsBud}
       <div class="leva-control">
         <button class="leva-step-btn" data-key="${l.key}" data-dir="-1">−</button>
         <div class="leva-value-box">
@@ -1377,7 +1604,8 @@ function renderLeve(ytd) {
         <button class="leva-step-btn" data-key="${l.key}" data-dir="1">+</button>
         <div class="leva-slider-wrap">
           <input type="range" id="sl-${l.key}" class="leva-slider" min="${l.min*100}" max="${l.max*100}" step="${l.step*100}" value="${dispVal}" data-key="${l.key}">
-          <div class="leva-zero-mark"></div>
+          <div class="leva-zero-mark" style="left:${((0 - l.min)/(l.max - l.min))*100}%"></div>
+          <div class="leva-zero-label" style="left:${((0 - l.min)/(l.max - l.min))*100}%">0</div>
         </div>
       </div>
       ${l.key === 'vendite' ? `<div class="align-row" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)">
@@ -2383,13 +2611,12 @@ function extractAnalisiN1Mensile(wb) {
   }
   
   // Helper: cerca una riga dove c'è "N-1" in colonna 4 e label specifica in col 2 o 3
-  // Restituisce array di 12 valori mensili (col 5..16)
+  // Restituisce OGGETTO {n1: [12 vals], real: [12 vals from row above]}
   function findRowN1(labelMatches) {
     for (let r = 1; r <= 175; r++) {
       const v4 = getCellVal(sheet, r, 4);
       if (!v4 || String(v4).trim().toUpperCase() !== 'N-1') continue;
       // Verifico il label sulla riga PRECEDENTE (REAL) o stessa riga col 2 o 3
-      // I label come "VTA Sin IVA" sono in col 3 nella riga REAL (r-1)
       const labelCurr = (getCellVal(sheet, r, 2) || '') + ' ' + (getCellVal(sheet, r, 3) || '');
       const labelPrev = (getCellVal(sheet, r-1, 2) || '') + ' ' + (getCellVal(sheet, r-1, 3) || '');
       const fullLabel = (labelCurr + ' ' + labelPrev).toUpperCase();
@@ -2405,38 +2632,67 @@ function extractAnalisiN1Mensile(wb) {
       }
       if (!matched) continue;
       
-      // Estraggo i 12 valori mese: colonne 5 (Feb) ... 16 (Gen)
-      const vals = [];
+      // Estraggo i 12 valori mese N-1: colonne 5 (Feb) ... 16 (Gen)
+      const valsN1 = [];
       for (let c = 5; c <= 16; c++) {
-        vals.push(cleanNum(getCellVal(sheet, r, c)) || 0);
+        valsN1.push(cleanNum(getCellVal(sheet, r, c)) || 0);
       }
-      console.log(`[extractAnalisiN1Mensile] "${matchedLbl}" trovato a R${r}, valori:`, vals.slice(0, 3), '...');
-      return vals;
+      // Estraggo anche i 12 valori mese REAL dalla riga PRECEDENTE (r-1)
+      // Verifico che quella riga abbia tag "REAL" in col 4
+      const tagPrev = String(getCellVal(sheet, r-1, 4) || '').trim().toUpperCase();
+      let valsReal = null;
+      if (tagPrev === 'REAL') {
+        valsReal = [];
+        for (let c = 5; c <= 16; c++) {
+          valsReal.push(cleanNum(getCellVal(sheet, r-1, c)) || 0);
+        }
+      }
+      console.log(`[extractAnalisiN1Mensile] "${matchedLbl}" R${r} N-1:`, valsN1.slice(0, 3), '... REAL(r-1):', valsReal ? valsReal.slice(0,3) : 'N/A');
+      return { n1: valsN1, real: valsReal };
     }
     return null;
   }
   
+  const vendite = findRowN1(['VTA Sin IVA', 'VTA SIN IVA', 'VENTAS']);
+  const oreDir = findRowN1(['H TRAB']);
+  const costoIntTienda = findRowN1(['INTERINALE']);
+  const costoIntAlmacen = findRowN1(['LOGISTICA']);
+  
   const result = {
-    vendite:    findRowN1(['VTA Sin IVA', 'VTA SIN IVA', 'VENTAS']),
-    ore_dir:    findRowN1(['H TRAB']),
-    costo_int_tienda:  findRowN1(['INTERINALE']),
-    ch_int_tienda:     null,  // lo cerco dopo Interinale
-    costo_int_almacen: findRowN1(['LOGISTICA']),
-    ch_int_almacen:    null,  // lo cerco dopo Logistica
+    vendite:           vendite ? vendite.n1 : null,
+    ore_dir:           oreDir ? oreDir.n1 : null,
+    costo_int_tienda:  costoIntTienda ? costoIntTienda.n1 : null,
+    ch_int_tienda:     null,
+    costo_int_almacen: costoIntAlmacen ? costoIntAlmacen.n1 : null,
+    ch_int_almacen:    null,
+    // NUOVO: REAL mensili (dalla riga sopra la N-1 corrispondente)
+    real_vendite:              vendite ? vendite.real : null,
+    real_ore_dir:              oreDir ? oreDir.real : null,
+    real_costo_int_tienda:     costoIntTienda ? costoIntTienda.real : null,
+    real_ch_int_tienda:        null,
+    real_costo_int_almacen:    costoIntAlmacen ? costoIntAlmacen.real : null,
+    real_ch_int_almacen:       null,
   };
   
-  // C/H interinali tienda: cerco la riga "C/H" subito DOPO la riga INTERINALE N-1
-  // C/H interinali almacen: cerco la riga "C/H" subito DOPO la riga LOGISTICA N-1
-  // Le cerco scorrendo il foglio: dopo "INTERINALE" la riga N-1 ha il C/H tienda 2 righe dopo
+  // C/H interinali tienda: cerco la riga "C/H N-1" e "C/H REAL"
+  // dopo INTERINALE e LOGISTICA
   for (let r = 1; r <= 175; r++) {
     const v3 = getCellVal(sheet, r, 3);
     if (!v3) continue;
     const lblUp = String(v3).toUpperCase().trim();
     if (lblUp === 'INTERINALE') {
-      // C/H tienda è la riga r+3 (riga N-1 sotto le "C/H")
+      // Cerca C/H REAL e C/H N-1 nelle 5 righe successive
       for (let rr = r+1; rr <= r+5; rr++) {
         const lbl = String(getCellVal(sheet, rr, 3) || '').toUpperCase().trim();
         const tag = String(getCellVal(sheet, rr, 4) || '').toUpperCase().trim();
+        if (lbl === 'C/H' && tag === 'REAL') {
+          const vals = [];
+          for (let c = 5; c <= 16; c++) {
+            vals.push(cleanNum(getCellVal(sheet, rr, c)) || 0);
+          }
+          result.real_ch_int_tienda = vals;
+          console.log(`[extractAnalisiN1Mensile] C/H tienda REAL a R${rr}:`, vals.slice(0,3));
+        }
         if (lbl === 'C/H' && tag === 'N-1') {
           const vals = [];
           for (let c = 5; c <= 16; c++) {
@@ -2444,13 +2700,20 @@ function extractAnalisiN1Mensile(wb) {
           }
           result.ch_int_tienda = vals;
           console.log(`[extractAnalisiN1Mensile] C/H tienda N-1 a R${rr}:`, vals.slice(0,3));
-          break;
         }
       }
     } else if (lblUp === 'LOGISTICA') {
       for (let rr = r+1; rr <= r+5; rr++) {
         const lbl = String(getCellVal(sheet, rr, 3) || '').toUpperCase().trim();
         const tag = String(getCellVal(sheet, rr, 4) || '').toUpperCase().trim();
+        if (lbl === 'C/H' && tag === 'REAL') {
+          const vals = [];
+          for (let c = 5; c <= 16; c++) {
+            vals.push(cleanNum(getCellVal(sheet, rr, c)) || 0);
+          }
+          result.real_ch_int_almacen = vals;
+          console.log(`[extractAnalisiN1Mensile] C/H almacen REAL a R${rr}:`, vals.slice(0,3));
+        }
         if (lbl === 'C/H' && tag === 'N-1') {
           const vals = [];
           for (let c = 5; c <= 16; c++) {
@@ -2458,13 +2721,12 @@ function extractAnalisiN1Mensile(wb) {
           }
           result.ch_int_almacen = vals;
           console.log(`[extractAnalisiN1Mensile] C/H almacen N-1 a R${rr}:`, vals.slice(0,3));
-          break;
         }
       }
     }
   }
   
-  // Derivo ore N-1 da costo / C/H per interinali tienda e almacen
+  // Derivo ore N-1 da costo / C/H
   if (result.costo_int_tienda && result.ch_int_tienda) {
     result.ore_int_tienda = result.costo_int_tienda.map((c, i) => 
       result.ch_int_tienda[i] > 0 ? c / result.ch_int_tienda[i] : 0
@@ -2473,6 +2735,18 @@ function extractAnalisiN1Mensile(wb) {
   if (result.costo_int_almacen && result.ch_int_almacen) {
     result.ore_int_almacen = result.costo_int_almacen.map((c, i) =>
       result.ch_int_almacen[i] > 0 ? c / result.ch_int_almacen[i] : 0
+    );
+  }
+  
+  // Derivo ore REAL mensili da costo REAL / C/H REAL (per interinali e logistica)
+  if (result.real_costo_int_tienda && result.real_ch_int_tienda) {
+    result.real_ore_int_tienda = result.real_costo_int_tienda.map((c, i) =>
+      result.real_ch_int_tienda[i] > 0 ? c / result.real_ch_int_tienda[i] : 0
+    );
+  }
+  if (result.real_costo_int_almacen && result.real_ch_int_almacen) {
+    result.real_ore_int_almacen = result.real_costo_int_almacen.map((c, i) =>
+      result.real_ch_int_almacen[i] > 0 ? c / result.real_ch_int_almacen[i] : 0
     );
   }
   
@@ -2592,6 +2866,47 @@ function buildBrandData(am, ppto, vob, n1Mens) {
     ore_int: distribY(ore_int_ytd_real, ore_int_mens_bud),
     ore_alm: distribY(ore_alm_ytd_real, ore_alm_mens_bud),
   };
+  
+  // OVERRIDE con valori REAL mensili letti direttamente dal foglio "Analsi VS. N-1"
+  // (se disponibili). Solo per i mesi chiusi (indici 0..nChiusi-1).
+  // Questi sono i valori CONSUNTIVATI REALI, non stimati per proporzione.
+  if (n1Mens) {
+    if (n1Mens.real_vendite && n1Mens.real_vendite.some(v => v > 0)) {
+      for (let i = 0; i < nChiusi; i++) {
+        if (n1Mens.real_vendite[i] > 0) real.vendite[i] = n1Mens.real_vendite[i];
+      }
+      console.log('[buildBrandData] real.vendite mensili sovrascritti da file:', real.vendite.slice(0, nChiusi));
+    }
+    if (n1Mens.real_ore_dir && n1Mens.real_ore_dir.some(v => v > 0)) {
+      for (let i = 0; i < nChiusi; i++) {
+        if (n1Mens.real_ore_dir[i] > 0) real.ore_dir[i] = n1Mens.real_ore_dir[i];
+      }
+      console.log('[buildBrandData] real.ore_dir mensili sovrascritti da file:', real.ore_dir.slice(0, nChiusi));
+    }
+    if (n1Mens.real_ore_int_tienda && n1Mens.real_ore_int_tienda.some(v => v > 0)) {
+      for (let i = 0; i < nChiusi; i++) {
+        if (n1Mens.real_ore_int_tienda[i] > 0) real.ore_int[i] = n1Mens.real_ore_int_tienda[i];
+      }
+      console.log('[buildBrandData] real.ore_int mensili sovrascritti da file:', real.ore_int.slice(0, nChiusi));
+    }
+    if (n1Mens.real_ore_int_almacen && n1Mens.real_ore_int_almacen.some(v => v > 0)) {
+      for (let i = 0; i < nChiusi; i++) {
+        if (n1Mens.real_ore_int_almacen[i] > 0) real.ore_alm[i] = n1Mens.real_ore_int_almacen[i];
+      }
+      console.log('[buildBrandData] real.ore_alm mensili sovrascritti da file:', real.ore_alm.slice(0, nChiusi));
+    }
+    // Sovrascrivo anche i costi int_tienda e int_almacen (li abbiamo dal file)
+    if (n1Mens.real_costo_int_tienda && n1Mens.real_costo_int_tienda.some(v => v > 0)) {
+      for (let i = 0; i < nChiusi; i++) {
+        if (n1Mens.real_costo_int_tienda[i] > 0) real.int_tienda[i] = n1Mens.real_costo_int_tienda[i];
+      }
+    }
+    if (n1Mens.real_costo_int_almacen && n1Mens.real_costo_int_almacen.some(v => v > 0)) {
+      for (let i = 0; i < nChiusi; i++) {
+        if (n1Mens.real_costo_int_almacen[i] > 0) real.int_almacen[i] = n1Mens.real_costo_int_almacen[i];
+      }
+    }
+  }
   
   const stato = MESI_KEYS.map((_, i) => i < nChiusi ? 'CHIUSO' : 'APERTO');
   
@@ -3846,7 +4161,7 @@ function exportForecastTTTT() {
   
   // === RIGA 1-4: TITOLO ===
   const brandLbl = brandName(CURRENT_BRAND);
-  S('E3', `TTTT ${brandLbl.toUpperCase()} ITALIA ${annoCurr}`, STY.title);
+  S('E3', `TTTT ${brandLbl.toUpperCase()} ITALIA ${annoCurr}   ·   Vendite CON IVA (22%)`, STY.title);
   // Riempio merge E3:AH3
   for (let c = 5; c <= 34; c++) {
     const addr = XLSX.utils.encode_cell({r:2, c:c-1});
@@ -3931,9 +4246,15 @@ function exportForecastTTTT() {
     return meseHaLeva(levaKey, i) ? STY.numRealLeva : STY.numRealAperto;
   }
   
+  // ===== IVA: le vendite nei file Matteo sono "Sin IVA" (net).
+  // Nel Forecast TTTT vogliamo mostrarle CON IVA (aliquota standard 22%).
+  // Applichiamo il moltiplicatore a REAL, PPTO e N-1 in modo uniforme.
+  const IVA_MULT = 1.22;
+  
   // ===== Funzione per "valore mese: real se chiuso, scen se aperto" =====
   function venditeMese(i) {
-    return mc[i] ? real.vendite[i] : scen.mensile[i].vendite;
+    const v = mc[i] ? real.vendite[i] : scen.mensile[i].vendite;
+    return v * IVA_MULT;
   }
   function oreTotMese(i) {
     if (mc[i]) {
@@ -3952,7 +4273,7 @@ function exportForecastTTTT() {
     if (scen.mensile[i].ore_alm) return scen.mensile[i].ore_alm || 0;
     return ppto.ore_alm ? ppto.ore_alm[i] : 0;
   }
-  function venditeBudMese(i) { return ppto.vendite[i] || 0; }
+  function venditeBudMese(i) { return (ppto.vendite[i] || 0) * IVA_MULT; }
   function oreTotBudMese(i) { 
     return (ppto.ore_dir[i] || 0) + (ppto.ore_int[i] || 0) + (ppto.ore_alm ? ppto.ore_alm[i] : 0); 
   }
@@ -3963,7 +4284,7 @@ function exportForecastTTTT() {
   // Helper N-1: leggono dai dati mensili salvati nel JSON (DATA.n1.mensile)
   // Se non disponibile (es. config caricata da JSON vecchio), ritornano 0
   const n1Mens = (DATA.n1 && DATA.n1.mensile) ? DATA.n1.mensile : null;
-  function venditeN1Mese(i) { return n1Mens && n1Mens.vendite ? (n1Mens.vendite[i] || 0) : 0; }
+  function venditeN1Mese(i) { return (n1Mens && n1Mens.vendite ? (n1Mens.vendite[i] || 0) : 0) * IVA_MULT; }
   function oreDirN1Mese(i) { return n1Mens && n1Mens.ore_dir ? (n1Mens.ore_dir[i] || 0) : 0; }
   function oreIntN1Mese(i) { return n1Mens && n1Mens.ore_int ? (n1Mens.ore_int[i] || 0) : 0; }
   function oreAlmN1Mese(i) { return n1Mens && n1Mens.ore_alm ? (n1Mens.ore_alm[i] || 0) : 0; }
@@ -4350,18 +4671,20 @@ async function exportPDF() {
     if (!isFirstPage) pdf.addPage();
     drawHeader(pageNum, totalPages, subtitle);
     
-    const canvas = await html2canvas(htmlElement, {scale:2, backgroundColor:'#F8FAFC', windowWidth:1280});
-    const imgData = canvas.toDataURL('image/png');
+    const canvas = await html2canvas(htmlElement, {scale:1.2, backgroundColor:'#FFFFFF', windowWidth:1280});
+    // JPEG con qualità 0.75 invece di PNG: riduce il peso del PDF di ~70-80% 
+    // mantenendo comunque una buona leggibilità
+    const imgData = canvas.toDataURL('image/jpeg', 0.75);
     const imgW = contentW;
     const imgH = canvas.height * imgW / canvas.width;
     const headerSpace = 22;
     const availH = pdfH - headerSpace - margin;
     
     if (imgH <= availH) {
-      pdf.addImage(imgData, 'PNG', margin, headerSpace, imgW, imgH);
+      pdf.addImage(imgData, 'JPEG', margin, headerSpace, imgW, imgH);
     } else {
       const scaleFactor = availH / imgH;
-      pdf.addImage(imgData, 'PNG', margin, headerSpace, imgW*scaleFactor, availH);
+      pdf.addImage(imgData, 'JPEG', margin, headerSpace, imgW*scaleFactor, availH);
     }
   }
   

@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "anno": 2026,
-  "saved_at": "2026-09-21T07:59:23.802Z",
-  "current_brand": "zara",
+  "saved_at": "2026-10-02T13:00:41.638Z",
+  "current_brand": "massimo_dutti",
   "brands": {
     "zara": {
       "meta": {
@@ -4973,21 +4973,21 @@
           "mesi": [
             7
           ],
-          "valore": 0.005
+          "valore": 0.05750000000000001
         },
         {
           "nome": "OTT–OTT",
           "mesi": [
             8
           ],
-          "valore": 0.032499999999999994
+          "valore": 0.0375
         },
         {
           "nome": "NOV–NOV",
           "mesi": [
             9
           ],
-          "valore": 0.0375
+          "valore": 0.032499999999999994
         },
         {
           "nome": "DIC–DIC",
@@ -5001,7 +5001,7 @@
           "mesi": [
             11
           ],
-          "valore": 0.0375
+          "valore": 0.05000000000000001
         }
       ],
       "ore": [
@@ -5010,28 +5010,28 @@
           "mesi": [
             7
           ],
-          "valore": 0.07000000000000002
+          "valore": 0.07750000000000003
         },
         {
           "nome": "OTT–OTT",
           "mesi": [
             8
           ],
-          "valore": 0.05999999999999997
+          "valore": 0.06249999999999997
         },
         {
           "nome": "NOV–NOV",
           "mesi": [
             9
           ],
-          "valore": 0.03749999999999999
+          "valore": 0.02499999999999999
         },
         {
           "nome": "DIC–DIC",
           "mesi": [
             10
           ],
-          "valore": 0.05750000000000001
+          "valore": 0.03249999999999999
         },
         {
           "nome": "GEN–GEN",
@@ -5088,7 +5088,7 @@
           "mesi": [
             7
           ],
-          "valore": -0.12000000000000004
+          "valore": -0.07500000000000001
         },
         {
           "nome": "OTT–OTT",
@@ -5125,7 +5125,7 @@
           "mesi": [
             7
           ],
-          "valore": -0.05749999999999998
+          "valore": -0.027499999999999962
         },
         {
           "nome": "OTT–OTT",
@@ -5203,7 +5203,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.04000000000000001
+          "valore": 0.08999999999999998
         },
         {
           "nome": "OTT–OTT",
@@ -5240,7 +5240,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.03749999999999995
+          "valore": 0.07249999999999998
         },
         {
           "nome": "OTT–OTT",
@@ -5318,7 +5318,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.027499999999999997
+          "valore": 0.07249999999999998
         },
         {
           "nome": "OTT–OTT",
@@ -5355,7 +5355,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.0325
+          "valore": 0.05249999999999998
         },
         {
           "nome": "OTT–OTT",
@@ -5433,7 +5433,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.09000000000000002
+          "valore": 0.09500000000000003
         },
         {
           "nome": "OTT–OTT",
@@ -5470,7 +5470,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.08750000000000002
+          "valore": 0.11500000000000005
         },
         {
           "nome": "OTT–OTT",
@@ -5548,7 +5548,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.08000000000000003
+          "valore": 0.07000000000000002
         },
         {
           "nome": "OTT–OTT",
@@ -5585,7 +5585,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.09999999999999999
+          "valore": 0.0125
         },
         {
           "nome": "OTT–OTT",
@@ -5663,7 +5663,7 @@
           "mesi": [
             7
           ],
-          "valore": -0.07499999999999996
+          "valore": -0.020000000000000007
         },
         {
           "nome": "OTT–OTT",
@@ -5700,7 +5700,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.15500000000000003
+          "valore": 0.2975
         },
         {
           "nome": "OTT–OTT",
@@ -5778,7 +5778,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.6874999999999999
+          "valore": 0.795
         },
         {
           "nome": "OTT–OTT",
@@ -5815,7 +5815,7 @@
           "mesi": [
             7
           ],
-          "valore": 0.8925000000000006
+          "valore": 0.700000000000002
         },
         {
           "nome": "OTT–OTT",
@@ -5889,57 +5889,57 @@
   },
   "subperiod_attivo_brand": {
     "zara": {
-      "vendite": 4,
-      "ore": 1,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "bershka": {
-      "vendite": 4,
-      "ore": 4,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "pull_bear": {
-      "vendite": 4,
-      "ore": 4,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "stradivarius": {
-      "vendite": 4,
-      "ore": 4,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "zara_home": {
-      "vendite": 4,
-      "ore": 3,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "oysho": {
-      "vendite": 4,
-      "ore": 4,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "massimo_dutti": {
-      "vendite": 4,
-      "ore": 4,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
     },
     "lefties": {
-      "vendite": 4,
-      "ore": 4,
+      "vendite": 0,
+      "ore": 0,
       "ch_sueldos": 0,
       "mix_int": 0,
       "mix_iv": 0
